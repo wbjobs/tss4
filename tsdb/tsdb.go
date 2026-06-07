@@ -3,6 +3,7 @@ package tsdb
 import (
 	"fmt"
 	"gorilla-tsdb/block"
+	"gorilla-tsdb/downsample"
 	"gorilla-tsdb/index"
 	"sort"
 	"sync"
@@ -56,6 +57,10 @@ func (db *TSDB) WriteBatch(points []block.DataPoint) error {
 }
 
 func (db *TSDB) Query(startTime, endTime int64) ([]block.DataPoint, error) {
+	return db.QueryWithDownsample(startTime, endTime, 0)
+}
+
+func (db *TSDB) QueryWithDownsample(startTime, endTime int64, threshold int) ([]block.DataPoint, error) {
 	result, err := db.index.Query(startTime, endTime)
 	if err != nil {
 		return nil, err
@@ -88,6 +93,10 @@ func (db *TSDB) Query(startTime, endTime int64) ([]block.DataPoint, error) {
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].Timestamp < result[j].Timestamp
 	})
+
+	if threshold > 0 && len(result) > threshold {
+		result = downsample.LTTB(result, threshold)
+	}
 
 	return result, nil
 }

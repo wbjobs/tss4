@@ -172,6 +172,7 @@ func (h *Handler) Query(w http.ResponseWriter, r *http.Request) {
 
 	startStr := r.URL.Query().Get("start")
 	endStr := r.URL.Query().Get("end")
+	downsampleStr := r.URL.Query().Get("downsample")
 
 	if startStr == "" || endStr == "" {
 		w.WriteHeader(http.StatusBadRequest)
@@ -211,7 +212,20 @@ func (h *Handler) Query(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	points, err := h.db.Query(startTime, endTime)
+	downsample := 0
+	if downsampleStr != "" {
+		downsample, err = strconv.Atoi(downsampleStr)
+		if err != nil || downsample < 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(QueryResponse{
+				Success: false,
+				Message: "invalid downsample parameter",
+			})
+			return
+		}
+	}
+
+	points, err := h.db.QueryWithDownsample(startTime, endTime, downsample)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(QueryResponse{

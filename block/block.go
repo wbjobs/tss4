@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"gorilla-tsdb/compression"
+	"gorilla-tsdb/util"
 	"math"
 	"os"
 	"path/filepath"
@@ -96,10 +97,13 @@ func (b *Block) Compress() ([]byte, error) {
 
 	compressedData := w.Bytes()
 
-	header := make([]byte, 18)
+	checksum := util.XXHash64Sum(compressedData)
+
+	header := make([]byte, 26)
 	binary.LittleEndian.PutUint64(header[0:8], uint64(b.MinTime))
 	binary.LittleEndian.PutUint64(header[8:16], uint64(b.MaxTime))
 	binary.LittleEndian.PutUint16(header[16:18], uint16(len(b.Points)))
+	binary.LittleEndian.PutUint64(header[18:26], checksum)
 
 	result := make([]byte, 0, len(header)+len(compressedData))
 	result = append(result, header...)
@@ -110,15 +114,21 @@ func (b *Block) Compress() ([]byte, error) {
 }
 
 func Decompress(data []byte) (*Block, error) {
-	if len(data) < 18 {
-		return nil, fmt.Errorf("block data too short: %d bytes", len(data))
+	if len(data) < 26 {
+		return nil, fmt.Errorf("block data too short: %d bytes, need at least 26 bytes", len(data))
 	}
 
 	minTime := int64(binary.LittleEndian.Uint64(data[0:8]))
 	maxTime := int64(binary.LittleEndian.Uint64(data[8:16]))
 	count := int(binary.LittleEndian.Uint16(data[16:18]))
+	expectedChecksum := binary.LittleEndian.Uint64(data[18:26])
 
-	compressedData := data[18:]
+	compressedData := data[26:]
+
+	actualChecksum := util.XXHash64Sum(compressedData)
+	if actualChecksum != expectedChecksum {
+		return nil, fmt.Errorf("block checksum mismatch: expected 0x%x, got 0x%x", expectedChecksum, actualChecksum)
+	}
 
 	r := compression.NewBitReader(compressedData)
 
