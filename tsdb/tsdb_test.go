@@ -240,6 +240,181 @@ func TestTSDBFlush(t *testing.T) {
 	}
 }
 
+func TestOutOfOrderWrite(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tsdb-test")
+	if err != nil {
+		t.Fatalf("create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	db, err := NewTSDB(tmpDir)
+	if err != nil {
+		t.Fatalf("create TSDB: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now().UnixNano()
+
+	points := []block.DataPoint{
+		{Timestamp: now + 5*1000000000, Value: 5.0},
+		{Timestamp: now + 2*1000000000, Value: 2.0},
+		{Timestamp: now + 8*1000000000, Value: 8.0},
+		{Timestamp: now + 1*1000000000, Value: 1.0},
+		{Timestamp: now + 3*1000000000, Value: 3.0},
+		{Timestamp: now + 7*1000000000, Value: 7.0},
+		{Timestamp: now + 4*1000000000, Value: 4.0},
+		{Timestamp: now + 6*1000000000, Value: 6.0},
+	}
+
+	for _, p := range points {
+		if err := db.Write(p); err != nil {
+			t.Fatalf("write point: %v", err)
+		}
+	}
+
+	activeBlock := db.ActiveBlock()
+	if len(activeBlock.Points) != 8 {
+		t.Fatalf("expected 8 points, got %d", len(activeBlock.Points))
+	}
+
+	for i := 1; i < len(activeBlock.Points); i++ {
+		if activeBlock.Points[i].Timestamp <= activeBlock.Points[i-1].Timestamp {
+			t.Errorf("points not sorted at index %d: prev=%d, curr=%d",
+				i, activeBlock.Points[i-1].Timestamp, activeBlock.Points[i].Timestamp)
+		}
+	}
+
+	for i, p := range activeBlock.Points {
+		expectedTS := now + int64(i+1)*1000000000
+		expectedVal := float64(i + 1)
+		if p.Timestamp != expectedTS {
+			t.Errorf("point %d timestamp: expected %d, got %d", i, expectedTS, p.Timestamp)
+		}
+		if p.Value != expectedVal {
+			t.Errorf("point %d value: expected %v, got %v", i, expectedVal, p.Value)
+		}
+	}
+
+	queryResult, err := db.Query(now, now+10*1000000000)
+	if err != nil {
+		t.Fatalf("query failed: %v", err)
+	}
+
+	if len(queryResult) != 8 {
+		t.Errorf("query expected 8 points, got %d", len(queryResult))
+	}
+
+	for i, p := range queryResult {
+		expectedTS := now + int64(i+1)*1000000000
+		if p.Timestamp != expectedTS {
+			t.Errorf("query point %d timestamp: expected %d, got %d", i, expectedTS, p.Timestamp)
+		}
+	}
+
+	t.Log("Out-of-order write test passed")
+}
+
+func TestDuplicateTimestamp(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tsdb-test")
+	if err != nil {
+		t.Fatalf("create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	db, err := NewTSDB(tmpDir)
+	if err != nil {
+		t.Fatalf("create TSDB: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now().UnixNano()
+
+	db.Write(block.DataPoint{Timestamp: now, Value: 1.0})
+	db.Write(block.DataPoint{Timestamp: now, Value: 2.0})
+	db.Write(block.DataPoint{Timestamp: now, Value: 3.0})
+
+	activeBlock := db.ActiveBlock()
+	if len(activeBlock.Points) != 1 {
+		t.Fatalf("expected 1 point after duplicates, got %d", len(activeBlock.Points))
+	}
+
+	if activeBlock.Points[0].Value != 3.0 {
+		t.Errorf("expected value 3.0 (last write wins), got %v", activeBlock.Points[0].Value)
+	}
+
+	queryResult, err := db.Query(now, now)
+	if err != nil {
+		t.Fatalf("query failed: %v", err)
+	}
+
+	if len(queryResult) != 1 {
+		t.Errorf("query expected 1 point, got %d", len(queryResult))
+	}
+
+	if queryResult[0].Value != 3.0 {
+		t.Errorf("query expected value 3.0, got %v", queryResult[0].Value)
+	}
+
+	t.Log("Duplicate timestamp test passed")
+}
+
+func TestQueryDeduplication(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tsdb-test")
+	if err != nil {
+		t.Fatalf("create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	db, err := NewTSDB(tmpDir)
+	if err != nil {
+		t.Fatalf("create TSDB: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now().UnixNano()
+
+	for i := 0; i < 70; i++ {
+		db.Write(block.DataPoint{
+			Timestamp: now + int64(i)*1000000000,
+			Value:     float64(i),
+		})
+	}
+
+	if err := db.Flush(); err != nil {
+		t.Fatalf("flush failed: %v", err)
+	}
+
+	db.Write(block.DataPoint{
+		Timestamp: now + 30*1000000000,
+		Value:     999.0,
+	})
+
+	queryResult, err := db.Query(now, now+100*1000000000)
+	if err != nil {
+		t.Fatalf("query failed: %v", err)
+	}
+
+	if len(queryResult) != 70 {
+		t.Errorf("expected 70 unique points, got %d", len(queryResult))
+	}
+
+	seen := make(map[int64]bool)
+	for _, p := range queryResult {
+		if seen[p.Timestamp] {
+			t.Errorf("duplicate timestamp found: %d", p.Timestamp)
+		}
+		seen[p.Timestamp] = true
+	}
+
+	for i, p := range queryResult {
+		if i > 0 && p.Timestamp <= queryResult[i-1].Timestamp {
+			t.Errorf("points not sorted at index %d", i)
+		}
+	}
+
+	t.Log("Query deduplication test passed")
+}
+
 func TestCompressionRatio(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "tsdb-test")
 	if err != nil {

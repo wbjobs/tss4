@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"gorilla-tsdb/block"
 	"gorilla-tsdb/index"
+	"sort"
 	"sync"
 )
 
@@ -64,21 +65,29 @@ func (db *TSDB) Query(startTime, endTime int64) ([]block.DataPoint, error) {
 	activeBlock := db.activeBlock
 	db.mu.Unlock()
 
+	seen := make(map[int64]block.DataPoint, len(result))
+	for _, p := range result {
+		seen[p.Timestamp] = p
+	}
+
 	if activeBlock != nil && len(activeBlock.Points) > 0 {
 		if activeBlock.MaxTime >= startTime && activeBlock.MinTime <= endTime {
 			for _, p := range activeBlock.Points {
 				if p.Timestamp >= startTime && p.Timestamp <= endTime {
-					result = append(result, p)
+					seen[p.Timestamp] = p
 				}
 			}
 		}
 	}
 
-	for i := 1; i < len(result); i++ {
-		for j := i; j > 0 && result[j-1].Timestamp > result[j].Timestamp; j-- {
-			result[j-1], result[j] = result[j], result[j-1]
-		}
+	result = make([]block.DataPoint, 0, len(seen))
+	for _, p := range seen {
+		result = append(result, p)
 	}
+
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Timestamp < result[j].Timestamp
+	})
 
 	return result, nil
 }

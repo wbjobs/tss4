@@ -4,6 +4,17 @@ import (
 	"math"
 )
 
+var (
+	quietNaN uint64 = 0x7ff8000000000001
+)
+
+func normalizeFloatBits(v uint64) uint64 {
+	if math.IsNaN(math.Float64frombits(v)) {
+		return quietNaN
+	}
+	return v
+}
+
 type TimestampEncoder struct {
 	w          *BitWriter
 	prevTime   int64
@@ -164,7 +175,7 @@ func NewXOREncoder(w *BitWriter) *XOREncoder {
 }
 
 func (e *XOREncoder) Encode(value float64) {
-	v := math.Float64bits(value)
+	v := normalizeFloatBits(math.Float64bits(value))
 
 	if e.firstPoint {
 		e.w.WriteBits(v, 64)

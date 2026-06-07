@@ -146,6 +146,7 @@ func (idx *Index) Query(startTime, endTime int64) ([]block.DataPoint, error) {
 	idx.mu.RUnlock()
 
 	result := make([]block.DataPoint, 0)
+	seen := make(map[int64]bool)
 
 	for _, entry := range candidates {
 		b, err := idx.persister.LoadBlock(entry.FilePath)
@@ -155,7 +156,10 @@ func (idx *Index) Query(startTime, endTime int64) ([]block.DataPoint, error) {
 
 		for _, p := range b.Points {
 			if p.Timestamp >= startTime && p.Timestamp <= endTime {
-				result = append(result, p)
+				if !seen[p.Timestamp] {
+					seen[p.Timestamp] = true
+					result = append(result, p)
+				}
 			}
 		}
 	}

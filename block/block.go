@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 )
 
 const BlockSize = 64
@@ -36,7 +37,27 @@ func (b *Block) Add(point DataPoint) bool {
 	if b.Full {
 		return false
 	}
-	b.Points = append(b.Points, point)
+
+	idx := sort.Search(len(b.Points), func(i int) bool {
+		return b.Points[i].Timestamp >= point.Timestamp
+	})
+
+	if idx < len(b.Points) && b.Points[idx].Timestamp == point.Timestamp {
+		b.Points[idx].Value = point.Value
+		b.compressed = nil
+		return true
+	}
+
+	if idx == len(b.Points) {
+		b.Points = append(b.Points, point)
+	} else {
+		b.Points = append(b.Points, DataPoint{})
+		copy(b.Points[idx+1:], b.Points[idx:])
+		b.Points[idx] = point
+	}
+
+	b.compressed = nil
+
 	if point.Timestamp < b.MinTime {
 		b.MinTime = point.Timestamp
 	}
@@ -49,10 +70,19 @@ func (b *Block) Add(point DataPoint) bool {
 	return true
 }
 
+func (b *Block) Sort() {
+	sort.Slice(b.Points, func(i, j int) bool {
+		return b.Points[i].Timestamp < b.Points[j].Timestamp
+	})
+	b.compressed = nil
+}
+
 func (b *Block) Compress() ([]byte, error) {
 	if b.compressed != nil {
 		return b.compressed, nil
 	}
+
+	b.Sort()
 
 	w := compression.NewBitWriter()
 

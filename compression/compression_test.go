@@ -139,6 +139,14 @@ func TestXORCompression(t *testing.T) {
 			name:   "zero and one",
 			values: []float64{0, 1, 0, 1, 0, 1, 0, 1},
 		},
+		{
+			name:   "NaN values",
+			values: []float64{math.NaN(), 1.0, math.NaN(), math.NaN(), 2.0, math.NaN()},
+		},
+		{
+			name:   "mixed NaN and normal",
+			values: []float64{1.0, math.NaN(), 2.0, math.Inf(1), math.Inf(-1), math.NaN()},
+		},
 	}
 
 	for _, tt := range tests {
@@ -161,7 +169,11 @@ func TestXORCompression(t *testing.T) {
 				if err != nil {
 					t.Fatalf("value %d: decode error: %v", i, err)
 				}
-				if math.Abs(got-expected) > 1e-12 {
+				if math.IsNaN(expected) {
+					if !math.IsNaN(got) {
+						t.Fatalf("value %d: expected NaN, got %v", i, got)
+					}
+				} else if math.Abs(got-expected) > 1e-12 {
 					expectedBits := math.Float64bits(expected)
 					gotBits := math.Float64bits(got)
 					if expectedBits != gotBits {
